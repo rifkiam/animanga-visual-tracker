@@ -9,10 +9,15 @@ import {
   type Editor,
 } from "tldraw";
 import "tldraw/tldraw.css";
+import { ShapeMediaTooltip } from "@/app/components/ShapeMediaTooltip";
 import {
   CANVAS_PERSISTENCE_KEY,
   throttle,
 } from "@/lib/canvas/persistence";
+
+const tldrawComponents = {
+  InFrontOfTheCanvas: ShapeMediaTooltip,
+};
 
 type LoadingState =
   | { status: "loading" }
@@ -21,9 +26,10 @@ type LoadingState =
 
 type TldrawCanvasProps = {
   onMount?: (editor: Editor) => void;
+  colorScheme?: "dark" | "light";
 };
 
-export default function TldrawCanvas({ onMount }: TldrawCanvasProps) {
+export default function TldrawCanvas({ onMount, colorScheme = "light" }: TldrawCanvasProps) {
   const store = useMemo(() => createTLStore(), []);
   const [loadingState, setLoadingState] = useState<LoadingState>({
     status: "loading",
@@ -88,7 +94,12 @@ export default function TldrawCanvas({ onMount }: TldrawCanvasProps) {
 
   return (
     <div className="h-full w-full">
-      <Tldraw store={store} onMount={onMount} />
+      <Tldraw
+        store={store}
+        onMount={onMount}
+        colorScheme={colorScheme}
+        components={tldrawComponents}
+      />
     </div>
   );
 }

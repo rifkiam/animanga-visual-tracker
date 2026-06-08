@@ -18,7 +18,8 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const [mediaData, setMediaData] = useState<Media[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  
+  const [colorScheme, setColorScheme] = useState<"dark" | "light">("light");
+
   const seedAnimeData = async (media: string) => {
     const data = await getAnimeData(media);
 
@@ -98,6 +99,10 @@ export default function Home() {
     itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex, mediaData]);
 
+  useEffect(() => {
+    // editor.
+  }, [])
+
   const handleOnChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(event.target.value);
   }
@@ -152,6 +157,10 @@ export default function Home() {
     close();
   }
 
+  const handleOnThemeChange = (theme: "dark" | "light") => {
+    setColorScheme(theme);
+  }
+
   const loadImageSize = (src: string) =>
     new Promise<{ w: number; h: number }>((resolve, reject) => {
       const image = new Image();
@@ -199,16 +208,29 @@ export default function Home() {
       type: "image",
       x: center.x - displayWidth / 2,
       y: center.y - displayHeight / 2,
+      meta: {
+        title: media.title,
+        rating: media.rating,
+        malId: media.mal_id,
+        url: media.url,
+      },
       props: {
         assetId,
         w: displayWidth,
         h: displayHeight,
+        altText: media.title,
       },
     });
   };
 
   return (
     <div className="w-full h-screen">
+      <div className="absolute top-0 w-full z-10 flex justify-center items-center gap-2">
+        <div className="flex gap-4 bg-background rounded-b-lg p-2 shadow-md">
+          <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "dark" && "text-zinc-800")} onClick={() => handleOnThemeChange("dark")}>Dark</button>
+          <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "light" && "text-zinc-800")} onClick={() => handleOnThemeChange("light")}>Light</button>
+        </div>
+      </div>
       {isOpen && (
         <div
           className="flex flex-col gap-4 fixed z-50 rounded-md border border-zinc-300 bg-white px-2 py-1 shadow-md"
@@ -254,7 +276,7 @@ export default function Home() {
           </div>
         </div>
       )}
-      <TldrawCanvas onMount={setEditor} />
+      <TldrawCanvas onMount={setEditor} colorScheme={colorScheme} />
     </div>
   );
 }
