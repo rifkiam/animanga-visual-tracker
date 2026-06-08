@@ -13,7 +13,6 @@ import {
   CANVAS_PERSISTENCE_KEY,
   throttle,
 } from "@/lib/canvas/persistence";
-import { clsxm } from "@/lib/helper/clsxm";
 
 type LoadingState =
   | { status: "loading" }
@@ -88,8 +87,8 @@ export default function TldrawCanvas({ onMount }: TldrawCanvasProps) {
   }
 
   return (
-    <div className="h-screen w-full">
-      <Tldraw store={store} onMount={onMount} className={''} />
+    <div className="h-full w-full">
+      <Tldraw store={store} onMount={onMount} />
     </div>
   );
 }

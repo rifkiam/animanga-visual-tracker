@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSlashHook } from "@/lib/hooks/slashHook";
-import { useIsCoarsePointer } from "@/lib/hooks/useIsCoarsePointer";
-import { useTouchLongPress } from "@/lib/hooks/useTouchLongPress";
 import { Media } from "@/models/media";
 import { getAnimeData, getMangaData } from "@/lib/api/jikan";
 import { clsxm } from "@/lib/helper/clsxm";
@@ -11,12 +9,10 @@ import TldrawCanvas from "./containers/TldrawCanvas";
 import { AssetRecordType, type Editor } from "tldraw";
 
 export default function Home() {
-  const { isOpen, query, setQuery, position, openAt, close } = useSlashHook();
+  const { isOpen, query, setQuery, position, close } = useSlashHook();
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasWrapperRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const isCoarsePointer = useIsCoarsePointer();
 
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -56,29 +52,9 @@ export default function Home() {
 
   useEffect(() => {
     if (isOpen) {
-      inputRef.current?.focus({ preventScroll: true });
+      inputRef.current?.focus();
     }
   }, [isOpen]);
-
-  useTouchLongPress({
-    targetRef: canvasWrapperRef,
-    enabled: !isOpen,
-    onLongPress: openAt,
-    shouldIgnoreTarget: (target) =>
-      containerRef.current?.contains(target as Node) ?? false,
-  });
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (containerRef.current?.contains(event.target as Node)) return;
-      close();
-    };
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [isOpen, close]);
 
   useEffect(() => {
     const media = query.split("/").at(0);
@@ -150,6 +126,7 @@ export default function Home() {
       return;
     }
 
+    // add the selected to item to be placed on the tldraw canvas
     if (event.key === "Enter") {
       console.log(mediaData[selectedIndex]);
       event.preventDefault();
@@ -170,6 +147,10 @@ export default function Home() {
       }
     }
   };
+
+  const handleOnBlur = () => {
+    close();
+  }
 
   const loadImageSize = (src: string) =>
     new Promise<{ w: number; h: number }>((resolve, reject) => {
@@ -226,17 +207,11 @@ export default function Home() {
     });
   };
 
-  const handleResultSelect = (media: Media, idx: number) => {
-    setSelectedIndex(idx);
-    void addToCanvas(media);
-    close();
-  };
-
   return (
-    <div className="relative w-full h-screen">
+    <div className="w-full h-screen">
       {isOpen && (
         <div
-          className="flex flex-col gap-4 fixed z-50 max-w-[min(20rem,calc(100vw-1rem))] rounded-md border border-zinc-300 bg-white px-2 py-1 shadow-md touch-none"
+          className="flex flex-col gap-4 fixed z-50 rounded-md border border-zinc-300 bg-white px-2 py-1 shadow-md"
           style={{ left: position.x, top: position.y }}
           ref={containerRef}
         >
@@ -244,14 +219,15 @@ export default function Home() {
             <span className="text-xs">/</span>
             <input
               ref={inputRef}
+              onBlur={handleOnBlur}
               value={query}
               onChange={handleOnChange}
               onKeyDown={handleOnKeyDown}
-              placeholder="..."
-              className="min-w-0 flex-1 bg-transparent text-sm text-zinc-800 outline-none"
+              placeholder="Search..."
+              className="w-40 bg-transparent text-sm text-zinc-800 outline-none"
             />
           </div>
-          <div className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-auto overscroll-contain">
+          <div className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-scroll">
             {
               isLoading ? (
                 <div className="text-sm text-zinc-500">Loading...</div>
@@ -260,21 +236,13 @@ export default function Home() {
                   ref={(element) => {
                     itemRefs.current[idx] = element;
                   }}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleResultSelect(media, idx)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      handleResultSelect(media, idx);
-                    }
-                  }}
                   className={clsxm(
-                    "flex gap-2 scroll-m-1 cursor-pointer active:opacity-80",
+                    "flex gap-2 scroll-m-1",
                     selectedIndex === idx && "bg-blue-400 text-white rounded-md",
                   )}
                   key={media.mal_id}
                 >
-                  <img src={media.images.jpg.image_url} alt={media.title} className="w-24 h-32 p-2 rounded-md" />
+                  <img src={media.images.jpg.image_url} alt={media.title} className="w-24 h-32 p-2 rounded-sm" />
                   <div className="flex flex-col">
                     <p className="font-semibold">{media.title}</p>
                     <p className="text-sm text-zinc-500">{media.rating}</p>
@@ -286,9 +254,7 @@ export default function Home() {
           </div>
         </div>
       )}
-      <div ref={canvasWrapperRef} className="h-full w-full touch-manipulation">
-        <TldrawCanvas onMount={setEditor} />
-      </div>
+      <TldrawCanvas onMount={setEditor} />
     </div>
   );
 }

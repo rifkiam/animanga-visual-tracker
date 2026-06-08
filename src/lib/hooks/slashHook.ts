@@ -10,11 +10,6 @@ export const useSlashHook = () => {
     isOpenRef.current = isOpen;
   }, [isOpen]);
 
-  const openAt = useCallback((x: number, y: number) => {
-    setPosition({ x, y });
-    setIsOpen(true);
-  }, []);
-
   const close = useCallback(() => {
     setIsOpen(false);
     setQuery("");
@@ -36,36 +31,28 @@ export const useSlashHook = () => {
       setPosition({ x: event.clientX, y: event.clientY });
     };
 
-    const handleTouchMove = (event: TouchEvent) => {
-      if (!isOpenRef.current || event.touches.length === 0) return;
-      const touch = event.touches[0];
-      setPosition({ x: touch.clientX, y: touch.clientY });
-    };
-
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "/" && !isOpenRef.current && !isTypingTarget(event.target)) {
         event.preventDefault();
-        openAt(window.innerWidth / 2, window.innerHeight / 2);
+        setIsOpen(true);
+        setPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("touchmove", handleTouchMove, { passive: true });
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("touchmove", handleTouchMove);
     };
-  }, [openAt]);
+  }, []);
 
   return {
     isOpen,
     query,
     setQuery,
     position,
-    openAt,
     close,
   };
 };
