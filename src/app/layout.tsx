@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import MobileExperienceOverlay from "./components/MobileExperienceOverlay";
 import "./globals.css";
+import { Slide, ToastContainer } from "react-toastify";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -30,6 +31,16 @@ export default function RootLayout({
     >
       <body className="h-full flex flex-col">
         <MobileExperienceOverlay />
+        <ToastContainer
+          autoClose={2000}
+          hideProgressBar={false}
+          position="bottom-right"
+          closeOnClick
+          pauseOnFocusLoss
+          pauseOnHover
+          theme="dark"
+          transition={Slide}
+        />
         {children}
       </body>
     </html>

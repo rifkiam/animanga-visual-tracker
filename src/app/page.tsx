@@ -6,7 +6,9 @@ import { Media } from "@/models/media";
 import { getAnimeData, getMangaData } from "@/lib/api/jikan";
 import { clsxm } from "@/lib/helper/clsxm";
 import TldrawCanvas from "./containers/TldrawCanvas";
-import { AssetRecordType, type Editor } from "tldraw";
+import { AssetRecordType, TLAsset, type Editor } from "tldraw";
+import { toast } from "react-toastify";
+import Image from "next/image";
 
 export default function Home() {
   const { isOpen, query, setQuery, position, close } = useSlashHook();
@@ -20,10 +22,10 @@ export default function Home() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [colorScheme, setColorScheme] = useState<"dark" | "light">("light");
 
-  const seedAnimeData = async (media: string) => {
-    const data = await getAnimeData(media);
+  const seedAnimeData = async (title: string) => {
+    const data = await getAnimeData(title);
 
-    const mediaData = data.data.map((item) => ({
+    return data.data.map((item) => ({
       mal_id: item.mal_id,
       url: item.url,
       images: item.images,
@@ -32,13 +34,12 @@ export default function Home() {
       title: item.title,
       rating: item.score.toString(),
     }));
-    
-    setMediaData(mediaData);    
-  }
+  };
 
-  const seedMangaData = async (media: string) => {
-    const data = await getMangaData(media);
-    const mediaData = data.data.map((item) => ({
+  const seedMangaData = async (title: string) => {
+    const data = await getMangaData(title);
+
+    return data.data.map((item) => ({
       mal_id: item.mal_id,
       url: item.url,
       images: item.images,
@@ -47,65 +48,68 @@ export default function Home() {
       title: item.title,
       rating: item.score?.toString() ?? "N/A",
     }));
+  };
 
-    setMediaData(mediaData);    
+  const mediaType = query.split("/").at(0);
+  const searchTitle = query.split("/").at(1) ?? "";
+  const isValidSearch =
+    (mediaType === "anime" || mediaType === "manga") && searchTitle.length > 0;
+
+  const [prevQuery, setPrevQuery] = useState(query);
+  if (query !== prevQuery) {
+    setPrevQuery(query);
+    setSelectedIndex(0);
+
+    if (!isValidSearch) {
+      setMediaData([]);
+      setIsLoading(false);
+    } else {
+      setMediaData([]);
+      setIsLoading(true);
+    }
   }
 
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+
+    requestAnimationFrame(() => {
       inputRef.current?.focus();
-    }
+    });
   }, [isOpen]);
 
   useEffect(() => {
-    const media = query.split("/").at(0);
-    const title = query.split("/").at(1);
+    if (!isValidSearch) return;
 
-    if ((media !== "anime" && media !== "manga") || !title) {
-      setIsLoading(false);
-      setMediaData([]);
-      return;
-    }
+    let cancelled = false;
 
-    setIsLoading(true);
-    
     const timeoutId = window.setTimeout(() => {
-      if (media === "anime") {
-        void seedAnimeData(title);
-      } else {
-        void seedMangaData(title);
-      }
+      void (async () => {
+        try {
+          const results =
+            mediaType === "anime"
+              ? await seedAnimeData(searchTitle)
+              : await seedMangaData(searchTitle);
+
+          if (!cancelled) {
+            setMediaData(results);
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoading(false);
+          }
+        }
+      })();
     }, 1000);
 
     return () => {
+      cancelled = true;
       window.clearTimeout(timeoutId);
-      setIsLoading(false);
-      setMediaData([]);
     };
-  }, [query]);
-
-  useEffect(() => {
-    if (mediaData.length > 0) {
-      setIsLoading(false);
-    }
-  }, [mediaData]);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-    itemRefs.current = [];
-  }, [mediaData]);
+  }, [isValidSearch, mediaType, searchTitle]);
 
   useEffect(() => {
     itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex, mediaData]);
-
-  useEffect(() => {
-    // editor.
-  }, [])
-
-  const handleOnChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setQuery(event.target.value);
-  }
 
   const moveSelection = useCallback(
     (direction: "up" | "down") => {
@@ -121,6 +125,10 @@ export default function Home() {
     },
     [mediaData.length],
   );
+  
+  const handleOnChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setQuery(event.target.value);
+  }
 
   const handleOnKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const value = event.currentTarget.value;
@@ -161,20 +169,76 @@ export default function Home() {
     setColorScheme(theme);
   }
 
+  const handleOnMount = useCallback((nextEditor: Editor) => {
+    setEditor(nextEditor);
+  }, []);
+
+  useEffect(() => {
+    if (!editor) return;
+
+    const cleanupDelete = editor.sideEffects.registerAfterDeleteHandler(
+      "shape",
+      (shape, _source) => {
+        if (shape.type !== "image") return;
+
+        const assetId = shape.props.assetId;
+        if (!assetId) return;
+
+        const stillUsed = editor
+          .getCurrentPageShapes()
+          .some(
+            (s) => s.type === "image" && s.props.assetId === assetId,
+          );
+
+        if (!stillUsed) {
+          editor.deleteAssets([assetId]);
+        }
+
+        toast.success("Title removed from canvas");
+      },
+    );
+
+    const cleanupCreate = editor.sideEffects.registerAfterCreateHandler(
+      "shape",
+      () => {
+        toast.success("Title added to canvas");
+      },
+    );
+
+    return () => {
+      cleanupDelete();
+      cleanupCreate();
+    };
+  }, [editor]);
+
   const loadImageSize = (src: string) =>
     new Promise<{ w: number; h: number }>((resolve, reject) => {
-      const image = new Image();
+      const image = new window.Image();
       image.onload = () =>
         resolve({ w: image.naturalWidth, h: image.naturalHeight });
       image.onerror = reject;
       image.src = src;
     });
 
+  const loadAssetsJson = useCallback(() => {
+    const assets = editor?.getAssets() ?? [];
+    if (assets.length > 0) {
+      return assets;
+    }
+    return [];
+  }, [editor])
+
   const addToCanvas = async (media: Media) => {
     if (!editor) return;
+    
+    const assets = loadAssetsJson();
+    console.log(assets);
+
+    let assetId: TLAsset["id"] | null = null;
+    const duplicateAsset = assets.find((asset) => asset.meta?.malId === media.mal_id);
 
     const imageUrl = media.images.jpg.image_url ?? "https://placehold.co/300x400/jpg?text=4:3";
-    const assetId = AssetRecordType.createId();
+
     const displayWidth = 300;
 
     let sourceWidth = displayWidth;
@@ -187,8 +251,31 @@ export default function Home() {
     const displayHeight = (sourceHeight / sourceWidth) * displayWidth;
     const center = editor.getViewportPageBounds().center;
 
-    editor.createAssets([
-      {
+    if (duplicateAsset) {
+      assetId = duplicateAsset.id
+      
+      editor.createShape({
+        type: "image",
+        x: center.x - displayWidth / 2,
+        y: center.y - displayHeight / 2,
+        meta: {
+          title: media.title,
+          rating: media.rating,
+          malId: media.mal_id,
+          url: media.url,
+        },
+        props: {
+          assetId,
+          w: displayWidth,
+          h: displayHeight,
+          altText: media.title,
+        },
+      });
+    }
+    else {
+      assetId = AssetRecordType.createId();
+
+      const asset: TLAsset = {
         id: assetId,
         type: "image",
         typeName: "asset",
@@ -200,37 +287,45 @@ export default function Home() {
           mimeType: "image/jpeg",
           isAnimated: false,
         },
-        meta: {},
-      },
-    ]);
+        meta: {
+          assetId,
+          title: media.title,
+          rating: media.rating,
+          malId: media.mal_id,
+          url: media.url,
+        },
+      }
+  
+      editor.createAssets([asset]);
 
-    editor.createShape({
-      type: "image",
-      x: center.x - displayWidth / 2,
-      y: center.y - displayHeight / 2,
-      meta: {
-        title: media.title,
-        rating: media.rating,
-        malId: media.mal_id,
-        url: media.url,
-      },
-      props: {
-        assetId,
-        w: displayWidth,
-        h: displayHeight,
-        altText: media.title,
-      },
-    });
+      editor.createShape({
+        type: "image",
+        x: center.x - displayWidth / 2,
+        y: center.y - displayHeight / 2,
+        meta: {
+          title: media.title,
+          rating: media.rating,
+          malId: media.mal_id,
+          url: media.url,
+        },
+        props: {
+          assetId,
+          w: displayWidth,
+          h: displayHeight,
+          altText: media.title,
+        },
+      });
+    }
   };
 
   return (
     <div className="w-full h-screen">
-      <div className="absolute top-0 w-full z-10 flex justify-center items-center gap-2">
+      {/* <div className="absolute top-0 w-full z-10 flex justify-center items-center gap-2">
         <div className="flex gap-4 bg-background rounded-b-lg p-2 shadow-md">
           <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "dark" && "text-zinc-800")} onClick={() => handleOnThemeChange("dark")}>Dark</button>
           <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "light" && "text-zinc-800")} onClick={() => handleOnThemeChange("light")}>Light</button>
         </div>
-      </div>
+      </div> */}
       {isOpen && (
         <div
           className="flex flex-col gap-4 fixed z-50 rounded-md border border-zinc-300 bg-white px-2 py-1 shadow-md"
@@ -264,7 +359,7 @@ export default function Home() {
                   )}
                   key={media.mal_id}
                 >
-                  <img src={media.images.jpg.image_url} alt={media.title} className="w-24 h-32 p-2 rounded-sm" />
+                  <Image src={media.images.jpg.image_url} alt={media.title} className="w-24 h-32 p-2 rounded-sm" width={96} height={128} />
                   <div className="flex flex-col">
                     <p className="font-semibold">{media.title}</p>
                     <p className="text-sm text-zinc-500">{media.rating}</p>
@@ -276,7 +371,10 @@ export default function Home() {
           </div>
         </div>
       )}
-      <TldrawCanvas onMount={setEditor} colorScheme={colorScheme} />
+      <TldrawCanvas
+        onMount={handleOnMount}
+        colorScheme={colorScheme}
+      />
     </div>
   );
 }
