@@ -5,11 +5,15 @@ import { useSlashHook } from "@/lib/hooks/slashHook";
 import { Media } from "@/models/media";
 import { getAnimeData, getMangaData } from "@/lib/api/jikan";
 import { clsxm } from "@/lib/helper/clsxm";
+import { getCookie, setCookie } from "@/lib/helper/cookies";
+
+const HELP_TOAST_DISMISSED_COOKIE = "avt-help-toast-dismissed";
 import TldrawCanvas from "./containers/TldrawCanvas";
 import { AssetRecordType, TLAsset, type Editor } from "tldraw";
 import { toast } from "react-toastify";
 import Image from "next/image";
 import { Moon, Sun } from "lucide-react";
+import { isMediaShapeMeta } from "@/models/mediaShapeMeta";
 
 export default function Home() {
   const { isOpen, query, setQuery, position, close } = useSlashHook();
@@ -22,6 +26,27 @@ export default function Home() {
   const [mediaData, setMediaData] = useState<Media[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [colorScheme, setColorScheme] = useState<"dark" | "light">("light");
+  const [cmdList, setCmdList] = useState<{ label: string; desc: string }[]>([]);
+
+  
+  const commands = [
+    {
+      label: "/anime",
+      desc: "Search for an anime"
+    },
+    {
+      label: "/manga",
+      desc: "Search for a manga"
+    },
+    {
+      label: "/help",
+      desc: "Show help"
+    },
+    {
+      label: "/import",
+      desc: "Import your XML list from MAL"
+    },
+  ]
 
   const seedAnimeData = async (title: string) => {
     const data = await getAnimeData(title);
@@ -53,7 +78,6 @@ export default function Home() {
 
   const mediaType = query.split("/").at(0);
   const searchTitle = query.split("/").at(1) ?? "";
-  // const isValidAction = query === "import" || query === "help";
   const isValidSearch =
     (mediaType === "anime" || mediaType === "manga") && searchTitle.length > 0;
 
@@ -124,7 +148,7 @@ export default function Home() {
     const cleanupDelete = editor.sideEffects.registerAfterDeleteHandler(
       "shape",
       (shape, _source) => {
-        if (shape.type !== "image") return;
+        if (shape.type !== "image" || !isMediaShapeMeta(shape.meta)) return;
 
         const assetId = shape.props.assetId;
         if (!assetId) return;
@@ -145,7 +169,9 @@ export default function Home() {
 
     const cleanupCreate = editor.sideEffects.registerAfterCreateHandler(
       "shape",
-      () => {
+      (shape, _source) => {
+        if (shape.type !== "image" || !isMediaShapeMeta(shape.meta)) return;
+
         adaptToast("Title added to canvas", "success");
       },
     );
@@ -155,6 +181,19 @@ export default function Home() {
       cleanupCreate();
     };
   }, [editor]);
+
+  useEffect(() => {
+    if (getCookie(HELP_TOAST_DISMISSED_COOKIE)) return;
+
+    const toastId = toast("👉 Type /help for more information", {
+      theme: colorScheme === "dark" ? "light" : "dark",
+      autoClose: 5000,
+      onClick: () => {
+        setCookie(HELP_TOAST_DISMISSED_COOKIE, "1", 60 * 60 * 24 * 365);
+        toast.dismiss(toastId);
+      },
+    });
+  }, []);
 
   const moveSelection = useCallback(
     (direction: "up" | "down") => {
@@ -207,6 +246,9 @@ export default function Home() {
 
   const handleOnKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const value = event.currentTarget.value;
+    const dropdownCmdList = commands.filter((command) => command.label.includes(value));
+    if (dropdownCmdList.length > 0) setCmdList(dropdownCmdList);
+    else setCmdList([]);
 
     if ((event.key === "Backspace" && value.length === 0) || event.key === "Escape") {
       event.preventDefault();
@@ -221,7 +263,7 @@ export default function Home() {
     }
 
     // add the selected to item to be placed on the tldraw canvas
-    if ((value.includes("/anime") || value.includes("/manga")) && event.key === "Enter") {
+    if ((value.includes("anime") || value.includes("manga")) && event.key === "Enter") {
       console.log(mediaData[selectedIndex]);
       event.preventDefault();
       void addToCanvas(mediaData[selectedIndex]);
@@ -430,6 +472,13 @@ export default function Home() {
           </div>
           <div className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-scroll">
             {
+              cmdList.length > 0 ? (
+                <div className="flex flex-col gap-2">
+                  {cmdList.map((cmd) => (
+                    <div key={cmd.label} className="text-sm text-zinc-500">{cmd.label}</div>
+                  ))}
+                </div>
+              ) :
               isLoading ? (
                 <div className="text-sm text-zinc-500">Loading...</div>
               ) : mediaData.length > 0 ? mediaData.map((media, idx) => (
