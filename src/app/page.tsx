@@ -9,6 +9,7 @@ import TldrawCanvas from "./containers/TldrawCanvas";
 import { AssetRecordType, TLAsset, type Editor } from "tldraw";
 import { toast } from "react-toastify";
 import Image from "next/image";
+import { Moon, Sun } from "lucide-react";
 
 export default function Home() {
   const { isOpen, query, setQuery, position, close } = useSlashHook();
@@ -52,6 +53,7 @@ export default function Home() {
 
   const mediaType = query.split("/").at(0);
   const searchTitle = query.split("/").at(1) ?? "";
+  // const isValidAction = query === "import" || query === "help";
   const isValidSearch =
     (mediaType === "anime" || mediaType === "manga") && searchTitle.length > 0;
 
@@ -111,6 +113,49 @@ export default function Home() {
     itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex, mediaData]);
 
+  useEffect(() => {
+    if (!editor) return;
+    editor.user.updateUserPreferences({ colorScheme });
+  }, [editor, colorScheme]);
+
+  useEffect(() => {
+    if (!editor) return;
+
+    const cleanupDelete = editor.sideEffects.registerAfterDeleteHandler(
+      "shape",
+      (shape, _source) => {
+        if (shape.type !== "image") return;
+
+        const assetId = shape.props.assetId;
+        if (!assetId) return;
+
+        const stillUsed = editor
+          .getCurrentPageShapes()
+          .some(
+            (s) => s.type === "image" && s.props.assetId === assetId,
+          );
+
+        if (!stillUsed) {
+          editor.deleteAssets([assetId]);
+        }
+
+        adaptToast("Title removed from canvas", "success");
+      },
+    );
+
+    const cleanupCreate = editor.sideEffects.registerAfterCreateHandler(
+      "shape",
+      () => {
+        adaptToast("Title added to canvas", "success");
+      },
+    );
+
+    return () => {
+      cleanupDelete();
+      cleanupCreate();
+    };
+  }, [editor]);
+
   const moveSelection = useCallback(
     (direction: "up" | "down") => {
       setSelectedIndex((prev) => {
@@ -126,6 +171,36 @@ export default function Home() {
     [mediaData.length],
   );
   
+  const adaptToast = useCallback((message: string, type: "success" | "error" | "warning" | "info") => {
+    if (colorScheme === "dark") {
+      toast[type](message, {
+        theme: "light",
+      });
+    } else {
+      toast[type](message, {
+        theme: "dark",
+        });
+      }
+    },
+    [colorScheme],
+  );
+
+  const handleOnImportQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      adaptToast("Importing...", "success");
+      return;
+    }
+  }
+
+  const handleOnHelpQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      adaptToast("Help requested...", "success");
+      return;
+    }
+  }
+
   const handleOnChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setQuery(event.target.value);
   }
@@ -139,8 +214,14 @@ export default function Home() {
       return;
     }
 
+    if (value.length > 0 && value === "import") {
+      handleOnImportQ(event);
+    } else if (value.length > 0 && value === "help") {
+      handleOnHelpQ(event);
+    }
+
     // add the selected to item to be placed on the tldraw canvas
-    if (event.key === "Enter") {
+    if ((value.includes("/anime") || value.includes("/manga")) && event.key === "Enter") {
       console.log(mediaData[selectedIndex]);
       event.preventDefault();
       void addToCanvas(mediaData[selectedIndex]);
@@ -167,49 +248,11 @@ export default function Home() {
 
   const handleOnThemeChange = (theme: "dark" | "light") => {
     setColorScheme(theme);
-  }
+  };
 
   const handleOnMount = useCallback((nextEditor: Editor) => {
     setEditor(nextEditor);
   }, []);
-
-  useEffect(() => {
-    if (!editor) return;
-
-    const cleanupDelete = editor.sideEffects.registerAfterDeleteHandler(
-      "shape",
-      (shape, _source) => {
-        if (shape.type !== "image") return;
-
-        const assetId = shape.props.assetId;
-        if (!assetId) return;
-
-        const stillUsed = editor
-          .getCurrentPageShapes()
-          .some(
-            (s) => s.type === "image" && s.props.assetId === assetId,
-          );
-
-        if (!stillUsed) {
-          editor.deleteAssets([assetId]);
-        }
-
-        toast.success("Title removed from canvas");
-      },
-    );
-
-    const cleanupCreate = editor.sideEffects.registerAfterCreateHandler(
-      "shape",
-      () => {
-        toast.success("Title added to canvas");
-      },
-    );
-
-    return () => {
-      cleanupDelete();
-      cleanupCreate();
-    };
-  }, [editor]);
 
   const loadImageSize = (src: string) =>
     new Promise<{ w: number; h: number }>((resolve, reject) => {
@@ -320,19 +363,60 @@ export default function Home() {
 
   return (
     <div className="w-full h-screen">
-      {/* <div className="absolute top-0 w-full z-10 flex justify-center items-center gap-2">
-        <div className="flex gap-4 bg-background rounded-b-lg p-2 shadow-md">
+      {/* <div className="absolute top-2 w-full z-10 flex justify-center items-center gap-2">
+        <div className="flex gap-4 bg-background rounded-lg p-2 shadow-md">
           <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "dark" && "text-zinc-800")} onClick={() => handleOnThemeChange("dark")}>Dark</button>
           <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "light" && "text-zinc-800")} onClick={() => handleOnThemeChange("light")}>Light</button>
         </div>
       </div> */}
+      <div className="absolute top-2 w-full z-10 flex justify-center items-center gap-2">
+        <div
+          className={clsxm(
+            "flex items-center gap-1 rounded-lg border p-1 shadow-md transition-colors",
+            colorScheme === "dark"
+              ? "border-zinc-700 bg-zinc-900"
+              : "border-zinc-200 bg-white",
+          )}
+        >
+          <button
+            type="button"
+            aria-label="Light theme"
+            aria-pressed={colorScheme === "light"}
+            onClick={() => handleOnThemeChange("light")}
+            className={clsxm(
+              "cursor-pointer rounded-md p-2 transition-colors",
+              colorScheme === "light"
+                ? "bg-amber-100 text-amber-600"
+                : colorScheme === "dark"
+                  ? "text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                  : "text-zinc-400 hover:text-zinc-600",
+            )}
+          >
+            <Sun className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="Dark theme"
+            aria-pressed={colorScheme === "dark"}
+            onClick={() => handleOnThemeChange("dark")}
+            className={clsxm(
+              "cursor-pointer rounded-md p-2 transition-colors",
+              colorScheme === "dark"
+                ? "bg-indigo-500/20 text-indigo-300"
+                : "text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600",
+            )}
+          >
+            <Moon className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
       {isOpen && (
         <div
           className="flex flex-col gap-4 fixed z-50 rounded-md border border-zinc-300 bg-white px-2 py-1 shadow-md"
           style={{ left: position.x, top: position.y }}
           ref={containerRef}
         >
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <span className="text-xs">/</span>
             <input
               ref={inputRef}
@@ -354,7 +438,7 @@ export default function Home() {
                     itemRefs.current[idx] = element;
                   }}
                   className={clsxm(
-                    "flex gap-2 scroll-m-1",
+                    "flex gap-2 scroll-m-1 w-96",
                     selectedIndex === idx && "bg-blue-400 text-white rounded-md",
                   )}
                   key={media.mal_id}

@@ -38,7 +38,6 @@ export default function RootLayout({
           closeOnClick
           pauseOnFocusLoss
           pauseOnHover
-          theme="dark"
           transition={Slide}
         />
         {children}
