@@ -16,10 +16,12 @@ export interface MalMyInfo {
 
 export enum MalStatus {
     Watching = "Watching",
+    Reading = "Reading",
     Completed = "Completed",
     OnHold = "On-Hold",
     Dropped = "Dropped",
     PlanToWatch = "Plan to Watch",
+    PlanToRead = "Plan to Read",
 }
 
 

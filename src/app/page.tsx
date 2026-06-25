@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSlashHook } from "@/lib/hooks/slashHook";
 import { Media } from "@/models/media";
 import { getAnimeData, getMangaData } from "@/lib/api/jikan";
 import { clsxm } from "@/lib/helper/clsxm";
 import { getCookie, setCookie } from "@/lib/helper/cookies";
+import {
+  useColorScheme,
+  type ColorScheme,
+} from "@/lib/helper/colorScheme";
 
 const HELP_TOAST_DISMISSED_COOKIE = "avt-help-toast-dismissed";
 import TldrawCanvas from "./containers/TldrawCanvas";
@@ -14,19 +18,24 @@ import { toast } from "react-toastify";
 import Image from "next/image";
 import { Moon, Sun } from "lucide-react";
 import { isMediaShapeMeta } from "@/models/mediaShapeMeta";
+import MalImportModal from "./components/MalImportModal";
+import type { MalImportSuccess } from "@/lib/mal/parseMalListExport";
 
 export default function Home() {
   const { isOpen, query, setQuery, position, close } = useSlashHook();
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // const [textBold, setTextBold] = useState(false);
   const [mediaData, setMediaData] = useState<Media[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [colorScheme, setColorScheme] = useState<"dark" | "light">("light");
+  const [colorScheme, setColorScheme] = useColorScheme();
   const [cmdList, setCmdList] = useState<{ label: string; desc: string }[]>([]);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   
   const commands = [
@@ -44,7 +53,7 @@ export default function Home() {
     },
     {
       label: "/import",
-      desc: "Import your XML list from MAL"
+      desc: "Import your .xml list from MAL"
     },
   ]
 
@@ -58,7 +67,7 @@ export default function Home() {
       approved: item.approved,
       titles: item.titles,
       title: item.title,
-      rating: item.score.toString(),
+      rating: item.score?.toString() ?? "N/A",
     }));
   };
 
@@ -133,9 +142,21 @@ export default function Home() {
     };
   }, [isValidSearch, mediaType, searchTitle]);
 
-  useEffect(() => {
-    itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex, mediaData]);
+  useLayoutEffect(() => {
+    const container = listScrollRef.current;
+    const item = itemRefs.current[selectedIndex];
+
+    if (!container || !item) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+
+    if (itemRect.top < containerRect.top) {
+      container.scrollTop += itemRect.top - containerRect.top;
+    } else if (itemRect.bottom > containerRect.bottom) {
+      container.scrollTop += itemRect.bottom - containerRect.bottom;
+    }
+  }, [selectedIndex, cmdList, mediaData]);
 
   useEffect(() => {
     if (!editor) return;
@@ -195,47 +216,80 @@ export default function Home() {
     });
   }, []);
 
+  const activeListLength =
+    cmdList.length > 0 ? cmdList.length : mediaData.length;
+
   const moveSelection = useCallback(
-    (direction: "up" | "down") => {
+    (direction: "up" | "down", listLength = activeListLength) => {
       setSelectedIndex((prev) => {
-        if (mediaData.length === 0) return 0;
+        if (listLength === 0) return 0;
 
         if (direction === "down") {
-          return Math.min(prev + 1, mediaData.length - 1);
+          return Math.min(prev + 1, listLength - 1);
         }
 
         return Math.max(prev - 1, 0);
       });
     },
-    [mediaData.length],
+    [activeListLength],
   );
   
-  const adaptToast = useCallback((message: string, type: "success" | "error" | "warning" | "info") => {
-    if (colorScheme === "dark") {
-      toast[type](message, {
-        theme: "light",
+  const adaptToast = useCallback(
+    (message: string, type: "success" | "error" | "warning" | "info", duration: number = 2000) => {
+      const formattedMessage = message
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .join("\n");
+
+      const content = (
+        <div className="whitespace-pre-line text-sm leading-relaxed">
+          {formattedMessage}
+        </div>
+      );
+
+      toast[type](content, {
+        theme: colorScheme === "dark" ? "light" : "dark",
+        autoClose: duration
       });
-    } else {
-      toast[type](message, {
-        theme: "dark",
-        });
-      }
     },
     [colorScheme],
+  );
+
+  const openImportModal = useCallback(() => {
+    close();
+    setIsImportModalOpen(true);
+  }, [close]);
+
+  const handleImportSuccess = useCallback(
+    (result: MalImportSuccess) => {
+      adaptToast(
+        `Imported ${result.entries.length} ${result.type} entries for ${result.myinfo.user_name}`,
+        "success",
+      );
+    },
+    [adaptToast],
   );
 
   const handleOnImportQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      adaptToast("Importing...", "success");
+      openImportModal();
       return;
     }
-  }
+  };
 
   const handleOnHelpQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      adaptToast("Help requested...", "success");
+      adaptToast(
+        `/anime/title — search for an anime
+        /manga/title — search for a manga
+        /help — show this message
+        /import + Enter — import your MAL XML list`,
+        "info",
+        5000
+      );
       return;
     }
   }
@@ -246,9 +300,19 @@ export default function Home() {
 
   const handleOnKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const value = event.currentTarget.value;
-    const dropdownCmdList = commands.filter((command) => command.label.includes(value));
-    if (dropdownCmdList.length > 0) setCmdList(dropdownCmdList);
-    else setCmdList([]);
+    const dropdownCmdList = commands.filter((command) =>
+      command.label.includes(value),
+    );
+    setCmdList((prev) => {
+      const next = dropdownCmdList.length > 0 ? dropdownCmdList : [];
+      if (
+        prev.length === next.length &&
+        prev.every((cmd, index) => cmd.label === next[index]?.label)
+      ) {
+        return prev;
+      }
+      return next;
+    });
 
     if ((event.key === "Backspace" && value.length === 0) || event.key === "Escape") {
       event.preventDefault();
@@ -260,35 +324,55 @@ export default function Home() {
       handleOnImportQ(event);
     } else if (value.length > 0 && value === "help") {
       handleOnHelpQ(event);
+    } else if (event.key === "Enter" && dropdownCmdList.length > 0) {
+      const selectedCmd = dropdownCmdList[selectedIndex];
+      if (selectedCmd?.label === "/import") {
+        event.preventDefault();
+        openImportModal();
+        return;
+      }
+      if (selectedCmd?.label === "/help") {
+        event.preventDefault();
+        handleOnHelpQ(event);
+        return;
+      }
     }
 
     // add the selected to item to be placed on the tldraw canvas
     if ((value.includes("anime") || value.includes("manga")) && event.key === "Enter") {
-      console.log(mediaData[selectedIndex]);
       event.preventDefault();
       void addToCanvas(mediaData[selectedIndex]);
       return;
     }
 
-    if (!isLoading && mediaData.length > 0) {
+    const canNavigateCmd = dropdownCmdList.length > 0;
+    const canNavigateMedia =
+      !isLoading && mediaData.length > 0 && dropdownCmdList.length === 0;
+
+    const listLength = dropdownCmdList.length > 0
+      ? dropdownCmdList.length
+      : mediaData.length;
+
+    if (canNavigateCmd || canNavigateMedia) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        moveSelection("down");
+        moveSelection("down", listLength);
         return;
       }
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        moveSelection("up");
+        moveSelection("up", listLength);
       }
     }
   };
 
   const handleOnBlur = () => {
+    setCmdList([]);
     close();
   }
 
-  const handleOnThemeChange = (theme: "dark" | "light") => {
+  const handleOnThemeChange = (theme: ColorScheme) => {
     setColorScheme(theme);
   };
 
@@ -470,12 +554,28 @@ export default function Home() {
               className="w-40 bg-transparent text-sm text-zinc-800 outline-none"
             />
           </div>
-          <div className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-scroll">
+          <div
+            ref={listScrollRef}
+            className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-auto"
+          >
             {
               cmdList.length > 0 ? (
                 <div className="flex flex-col gap-2">
-                  {cmdList.map((cmd) => (
-                    <div key={cmd.label} className="text-sm text-zinc-500">{cmd.label}</div>
+                  {cmdList.map((cmd, idx) => (
+                    <div
+                      key={cmd.label}
+                      ref={(element) => {
+                        itemRefs.current[idx] = element;
+                      }}
+                      className={clsxm(
+                        "scroll-m-1 rounded-md px-2 py-1 text-sm text-zinc-500",
+                        selectedIndex === idx &&
+                          "bg-blue-400 font-semibold text-white",
+                      )}
+                    >
+                      <span>{cmd.label}</span>
+                      <span className="ml-2 text-xs opacity-80">{cmd.desc}</span>
+                    </div>
                   ))}
                 </div>
               ) :
@@ -493,7 +593,7 @@ export default function Home() {
                   key={media.mal_id}
                 >
                   <Image src={media.images.jpg.image_url} alt={media.title} className="w-24 h-32 p-2 rounded-sm" width={96} height={128} />
-                  <div className="flex flex-col">
+                  <div className="flex flex-col pt-1.5">
                     <p className="font-semibold">{media.title}</p>
                     <p className="text-sm text-zinc-500">{media.rating}</p>
                   </div>
@@ -504,6 +604,13 @@ export default function Home() {
           </div>
         </div>
       )}
+      <MalImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        colorScheme={colorScheme}
+        onSuccess={handleImportSuccess}
+        onError={(message) => adaptToast(message, "error")}
+      />
       <TldrawCanvas
         onMount={handleOnMount}
         colorScheme={colorScheme}
