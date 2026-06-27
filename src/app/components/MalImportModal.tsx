@@ -93,6 +93,7 @@ export default function MalImportModal({
       }
 
       onSuccess(result.result);
+
       onClose();
     } catch {
       onError("Could not read the selected file");

@@ -74,16 +74,18 @@ function validateMyInfo(raw: unknown, errors: string[]): MalMyInfo | null {
     user_id: asNumber(raw.user_id, "myinfo.user_id", errors),
     user_name: asString(raw.user_name, "myinfo.user_name", errors),
     user_export_type: asNumber(raw.user_export_type, "myinfo.user_export_type", errors),
-    user_total_anime: asNumber(raw.user_total_anime, "myinfo.user_total_anime", errors),
-    user_total_watching: asNumber(raw.user_total_watching, "myinfo.user_total_watching", errors),
+    ...(raw.user_export_type === 1 ? {
+      user_total_anime: asNumber(raw.user_total_anime, "myinfo.user_total_anime", errors),
+      user_total_watching: asNumber(raw.user_total_watching, "myinfo.user_total_watching", errors),
+      user_total_plantowatch: asNumber(raw.user_total_plantowatch,"myinfo.user_total_plantowatch", errors),
+    } : {
+      user_total_manga: asNumber(raw.user_total_manga, "myinfo.user_total_manga", errors),
+      user_total_reading: asNumber(raw.user_total_reading, "myinfo.user_total_reading", errors),
+      user_total_plantoread: asNumber(raw.user_total_plantoread, "myinfo.user_total_plantoread", errors),
+    }),
     user_total_completed: asNumber(raw.user_total_completed, "myinfo.user_total_completed", errors),
     user_total_onhold: asNumber(raw.user_total_onhold, "myinfo.user_total_onhold", errors),
     user_total_dropped: asNumber(raw.user_total_dropped, "myinfo.user_total_dropped", errors),
-    user_total_plantowatch: asNumber(
-      raw.user_total_plantowatch,
-      "myinfo.user_total_plantowatch",
-      errors,
-    ),
   };
 }
 

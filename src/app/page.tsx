@@ -10,16 +10,20 @@ import {
   useColorScheme,
   type ColorScheme,
 } from "@/lib/helper/colorScheme";
+import { useJikanServerStatus } from "@/lib/helper/jikanServerStatus";
 
 const HELP_TOAST_DISMISSED_COOKIE = "avt-help-toast-dismissed";
 import TldrawCanvas from "./containers/TldrawCanvas";
-import { AssetRecordType, TLAsset, type Editor } from "tldraw";
+import { type Editor } from "tldraw";
 import { toast } from "react-toastify";
 import Image from "next/image";
 import { Moon, Sun } from "lucide-react";
 import { isMediaShapeMeta } from "@/models/mediaShapeMeta";
 import MalImportModal from "./components/MalImportModal";
 import type { MalImportSuccess } from "@/lib/mal/parseMalListExport";
+import { addMediaToCanvas } from "@/lib/canvas/addMediaToCanvas";
+import { addMalImportToCanvas } from "@/lib/canvas/addMalImportToCanvas";
+import { mediaToCanvasItem } from "@/lib/canvas/canvasMediaItem";
 
 export default function Home() {
   const { isOpen, query, setQuery, position, close } = useSlashHook();
@@ -30,10 +34,11 @@ export default function Home() {
 
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  // const [textBold, setTextBold] = useState(false);
+  const [isLoadingImport, setIsLoadingImport] = useState(false);
   const [mediaData, setMediaData] = useState<Media[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [colorScheme, setColorScheme] = useColorScheme();
+  const jikanStatus = useJikanServerStatus();
   const [cmdList, setCmdList] = useState<{ label: string; desc: string }[]>([]);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
@@ -95,7 +100,7 @@ export default function Home() {
     setPrevQuery(query);
     setSelectedIndex(0);
 
-    if (!isValidSearch) {
+    if (!isValidSearch || !jikanStatus.isOnline) {
       setMediaData([]);
       setIsLoading(false);
     } else {
@@ -113,7 +118,7 @@ export default function Home() {
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isValidSearch) return;
+    if (!isValidSearch || !jikanStatus.isOnline) return;
 
     let cancelled = false;
 
@@ -140,7 +145,14 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [isValidSearch, mediaType, searchTitle]);
+  }, [isValidSearch, mediaType, searchTitle, jikanStatus.isOnline]);
+
+  useEffect(() => {
+    if (jikanStatus.isOnline) return;
+
+    setIsLoading(false);
+    setMediaData([]);
+  }, [jikanStatus.isOnline]);
 
   useLayoutEffect(() => {
     const container = listScrollRef.current;
@@ -256,24 +268,57 @@ export default function Home() {
     [colorScheme],
   );
 
+  const warnIfJikanOffline = useCallback(() => {
+    if (jikanStatus.isOnline) return false;
+
+    adaptToast(
+      jikanStatus.error ??
+        "Server is currently down. Search and import are disabled.",
+      "warning",
+    );
+    return true;
+  }, [adaptToast, jikanStatus.error, jikanStatus.isOnline]);
+
   const openImportModal = useCallback(() => {
+    if (warnIfJikanOffline()) return;
+
     close();
     setIsImportModalOpen(true);
-  }, [close]);
+  }, [close, warnIfJikanOffline]);
 
   const handleImportSuccess = useCallback(
     (result: MalImportSuccess) => {
+      if (warnIfJikanOffline()) return;
+
+      setIsLoadingImport(true);
+
+      if (!editor) {
+        adaptToast("Canvas is not ready yet. Try again in a moment.", "error");
+        return;
+      }
+
       adaptToast(
-        `Imported ${result.entries.length} ${result.type} entries for ${result.myinfo.user_name}`,
-        "success",
+        `Adding ${result.entries.length} ${result.type} entries to canvas…`,
+        "info",
+        3000,
       );
+
+      void addMalImportToCanvas(editor, result).then(({ added, failed }) => {
+        const suffix = failed > 0 ? ` (${failed} could not be loaded)` : "";
+        adaptToast(
+          `Imported ${added} ${result.type} entries for ${result.myinfo.user_name}${suffix}`,
+          added > 0 ? "success" : "error",
+        );
+        setIsLoadingImport(false);
+      });
     },
-    [adaptToast],
+    [adaptToast, editor, warnIfJikanOffline],
   );
 
   const handleOnImportQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
+      if (warnIfJikanOffline()) return;
       openImportModal();
       return;
     }
@@ -328,6 +373,7 @@ export default function Home() {
       const selectedCmd = dropdownCmdList[selectedIndex];
       if (selectedCmd?.label === "/import") {
         event.preventDefault();
+        if (warnIfJikanOffline()) return;
         openImportModal();
         return;
       }
@@ -341,6 +387,7 @@ export default function Home() {
     // add the selected to item to be placed on the tldraw canvas
     if ((value.includes("anime") || value.includes("manga")) && event.key === "Enter") {
       event.preventDefault();
+      if (warnIfJikanOffline()) return;
       void addToCanvas(mediaData[selectedIndex]);
       return;
     }
@@ -380,122 +427,28 @@ export default function Home() {
     setEditor(nextEditor);
   }, []);
 
-  const loadImageSize = (src: string) =>
-    new Promise<{ w: number; h: number }>((resolve, reject) => {
-      const image = new window.Image();
-      image.onload = () =>
-        resolve({ w: image.naturalWidth, h: image.naturalHeight });
-      image.onerror = reject;
-      image.src = src;
-    });
-
-  const loadAssetsJson = useCallback(() => {
-    const assets = editor?.getAssets() ?? [];
-    if (assets.length > 0) {
-      return assets;
-    }
-    return [];
-  }, [editor])
-
-  const addToCanvas = async (media: Media) => {
-    if (!editor) return;
-    
-    const assets = loadAssetsJson();
-    console.log(assets);
-
-    let assetId: TLAsset["id"] | null = null;
-    const duplicateAsset = assets.find((asset) => asset.meta?.malId === media.mal_id);
-
-    const imageUrl = media.images.jpg.image_url ?? "https://placehold.co/300x400/jpg?text=4:3";
-
-    const displayWidth = 300;
-
-    let sourceWidth = displayWidth;
-    let sourceHeight = 400;
-    
-    const size = await loadImageSize(imageUrl);
-    sourceWidth = size.w;
-    sourceHeight = size.h;
-
-    const displayHeight = (sourceHeight / sourceWidth) * displayWidth;
-    const center = editor.getViewportPageBounds().center;
-
-    if (duplicateAsset) {
-      assetId = duplicateAsset.id
-      
-      editor.createShape({
-        type: "image",
-        x: center.x - displayWidth / 2,
-        y: center.y - displayHeight / 2,
-        meta: {
-          title: media.title,
-          rating: media.rating,
-          malId: media.mal_id,
-          url: media.url,
-        },
-        props: {
-          assetId,
-          w: displayWidth,
-          h: displayHeight,
-          altText: media.title,
-        },
-      });
-    }
-    else {
-      assetId = AssetRecordType.createId();
-
-      const asset: TLAsset = {
-        id: assetId,
-        type: "image",
-        typeName: "asset",
-        props: {
-          name: media.title,
-          src: imageUrl,
-          w: sourceWidth,
-          h: sourceHeight,
-          mimeType: "image/jpeg",
-          isAnimated: false,
-        },
-        meta: {
-          assetId,
-          title: media.title,
-          rating: media.rating,
-          malId: media.mal_id,
-          url: media.url,
-        },
-      }
-  
-      editor.createAssets([asset]);
-
-      editor.createShape({
-        type: "image",
-        x: center.x - displayWidth / 2,
-        y: center.y - displayHeight / 2,
-        meta: {
-          title: media.title,
-          rating: media.rating,
-          malId: media.mal_id,
-          url: media.url,
-        },
-        props: {
-          assetId,
-          w: displayWidth,
-          h: displayHeight,
-          altText: media.title,
-        },
-      });
-    }
-  };
+  const addToCanvas = useCallback(
+    async (media: Media) => {
+      if (!editor || warnIfJikanOffline()) return;
+      await addMediaToCanvas(editor, mediaToCanvasItem(media));
+    },
+    [editor, warnIfJikanOffline],
+  );
 
   return (
     <div className="w-full h-screen">
-      {/* <div className="absolute top-2 w-full z-10 flex justify-center items-center gap-2">
-        <div className="flex gap-4 bg-background rounded-lg p-2 shadow-md">
-          <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "dark" && "text-zinc-800")} onClick={() => handleOnThemeChange("dark")}>Dark</button>
-          <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "light" && "text-zinc-800")} onClick={() => handleOnThemeChange("light")}>Light</button>
+
+      {isLoadingImport && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/30 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-zinc-200 bg-white px-6 py-4 shadow-lg">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-700" />
+            <p className="text-sm text-zinc-600">Importing your MAL list to canvas</p>
+            <p className="text-sm text-zinc-600">This could take a while...</p>
+          </div>
         </div>
-      </div> */}
-      <div className="absolute top-2 w-full z-10 flex justify-center items-center gap-2">
+      )}
+
+      <div className="absolute top-2 w-full z-10 flex flex-col items-center gap-2">
         <div
           className={clsxm(
             "flex items-center gap-1 rounded-lg border p-1 shadow-md transition-colors",
@@ -535,6 +488,24 @@ export default function Home() {
             <Moon className="h-4 w-4" />
           </button>
         </div>
+
+        {!jikanStatus.isOnline && (
+          <div
+            role="status"
+            className={clsxm(
+              "max-w-md rounded-lg border px-3 py-2 text-center text-sm shadow-md",
+              colorScheme === "dark"
+                ? "border-amber-900/50 bg-amber-950/80 text-amber-200"
+                : "border-amber-200 bg-amber-50 text-amber-900",
+            )}
+          >
+            <p className="font-medium">Server is currently down</p>
+            <p className="mt-0.5 text-xs opacity-80">
+              {jikanStatus.error ??
+                "Search and import are disabled until the server is back online"}
+            </p>
+          </div>
+        )}
       </div>
       {isOpen && (
         <div
