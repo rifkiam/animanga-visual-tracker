@@ -1,3 +1,45 @@
+export type JikanServerStatus = {
+    author_url: string;
+    discord_url: string;
+    version: string;
+    parser_version: string;
+    website_url: string;
+    documentation_url: string;
+    github_url: string;
+    parser_github_url: string;
+    production_api_url: string;
+    status_url: string;
+    myanimelist_heartbeat: {
+        status: string;
+        score: number;
+        down: boolean;
+        last_downtime: number;
+    };
+  };
+
+export type JikanMediaData = {
+  mal_id: number;
+  url: string;
+  images: {
+    jpg: {
+      image_url: string;
+      small_image_url: string;
+      large_image_url: string;
+    };
+    webp: {
+      image_url: string;
+      small_image_url: string;
+      large_image_url: string;
+    };
+  };
+  title: string;
+  rating?: string;
+};
+
+export interface JikanSingleResponse {
+  data: JikanMediaData;
+}
+
 export interface JikanResponse {
     pagination: {
         last_visible_page: number,

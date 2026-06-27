@@ -6,20 +6,25 @@ export interface MalMyInfo {
     user_id: number;
     user_name: string;
     user_export_type: number;
-    user_total_anime: number;
-    user_total_watching: number;
+    user_total_anime?: number;
+    user_total_watching?: number;
+    user_total_plantowatch?: number;
+    user_total_manga?: number;
+    user_total_reading?: number;
+    user_total_plantoread?: number;
     user_total_completed: number;
     user_total_onhold: number;
     user_total_dropped: number;
-    user_total_plantowatch: number;
 }
 
 export enum MalStatus {
     Watching = "Watching",
+    Reading = "Reading",
     Completed = "Completed",
     OnHold = "On-Hold",
     Dropped = "Dropped",
     PlanToWatch = "Plan to Watch",
+    PlanToRead = "Plan to Read",
 }
 
 

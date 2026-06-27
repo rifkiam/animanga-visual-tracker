@@ -1,32 +1,46 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useSlashHook } from "@/lib/hooks/slashHook";
 import { Media } from "@/models/media";
 import { getAnimeData, getMangaData } from "@/lib/api/jikan";
 import { clsxm } from "@/lib/helper/clsxm";
 import { getCookie, setCookie } from "@/lib/helper/cookies";
+import {
+  useColorScheme,
+  type ColorScheme,
+} from "@/lib/helper/colorScheme";
+import { useJikanServerStatus } from "@/lib/helper/jikanServerStatus";
 
 const HELP_TOAST_DISMISSED_COOKIE = "avt-help-toast-dismissed";
 import TldrawCanvas from "./containers/TldrawCanvas";
-import { AssetRecordType, TLAsset, type Editor } from "tldraw";
+import { type Editor } from "tldraw";
 import { toast } from "react-toastify";
 import Image from "next/image";
 import { Moon, Sun } from "lucide-react";
 import { isMediaShapeMeta } from "@/models/mediaShapeMeta";
+import MalImportModal from "./components/MalImportModal";
+import type { MalImportSuccess } from "@/lib/mal/parseMalListExport";
+import { addMediaToCanvas } from "@/lib/canvas/addMediaToCanvas";
+import { addMalImportToCanvas } from "@/lib/canvas/addMalImportToCanvas";
+import { mediaToCanvasItem } from "@/lib/canvas/canvasMediaItem";
 
 export default function Home() {
   const { isOpen, query, setQuery, position, close } = useSlashHook();
   const inputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const listScrollRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingImport, setIsLoadingImport] = useState(false);
   const [mediaData, setMediaData] = useState<Media[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [colorScheme, setColorScheme] = useState<"dark" | "light">("light");
+  const [colorScheme, setColorScheme] = useColorScheme();
+  const jikanStatus = useJikanServerStatus();
   const [cmdList, setCmdList] = useState<{ label: string; desc: string }[]>([]);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   
   const commands = [
@@ -44,7 +58,7 @@ export default function Home() {
     },
     {
       label: "/import",
-      desc: "Import your XML list from MAL"
+      desc: "Import your .xml list from MAL"
     },
   ]
 
@@ -58,7 +72,7 @@ export default function Home() {
       approved: item.approved,
       titles: item.titles,
       title: item.title,
-      rating: item.score.toString(),
+      rating: item.score?.toString() ?? "N/A",
     }));
   };
 
@@ -86,7 +100,7 @@ export default function Home() {
     setPrevQuery(query);
     setSelectedIndex(0);
 
-    if (!isValidSearch) {
+    if (!isValidSearch || !jikanStatus.isOnline) {
       setMediaData([]);
       setIsLoading(false);
     } else {
@@ -104,7 +118,7 @@ export default function Home() {
   }, [isOpen]);
 
   useEffect(() => {
-    if (!isValidSearch) return;
+    if (!isValidSearch || !jikanStatus.isOnline) return;
 
     let cancelled = false;
 
@@ -131,11 +145,30 @@ export default function Home() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [isValidSearch, mediaType, searchTitle]);
+  }, [isValidSearch, mediaType, searchTitle, jikanStatus.isOnline]);
 
   useEffect(() => {
-    itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex, mediaData]);
+    if (jikanStatus.isOnline) return;
+
+    setIsLoading(false);
+    setMediaData([]);
+  }, [jikanStatus.isOnline]);
+
+  useLayoutEffect(() => {
+    const container = listScrollRef.current;
+    const item = itemRefs.current[selectedIndex];
+
+    if (!container || !item) return;
+
+    const containerRect = container.getBoundingClientRect();
+    const itemRect = item.getBoundingClientRect();
+
+    if (itemRect.top < containerRect.top) {
+      container.scrollTop += itemRect.top - containerRect.top;
+    } else if (itemRect.bottom > containerRect.bottom) {
+      container.scrollTop += itemRect.bottom - containerRect.bottom;
+    }
+  }, [selectedIndex, cmdList, mediaData]);
 
   useEffect(() => {
     if (!editor) return;
@@ -195,47 +228,113 @@ export default function Home() {
     });
   }, []);
 
+  const activeListLength =
+    cmdList.length > 0 ? cmdList.length : mediaData.length;
+
   const moveSelection = useCallback(
-    (direction: "up" | "down") => {
+    (direction: "up" | "down", listLength = activeListLength) => {
       setSelectedIndex((prev) => {
-        if (mediaData.length === 0) return 0;
+        if (listLength === 0) return 0;
 
         if (direction === "down") {
-          return Math.min(prev + 1, mediaData.length - 1);
+          return Math.min(prev + 1, listLength - 1);
         }
 
         return Math.max(prev - 1, 0);
       });
     },
-    [mediaData.length],
+    [activeListLength],
   );
   
-  const adaptToast = useCallback((message: string, type: "success" | "error" | "warning" | "info") => {
-    if (colorScheme === "dark") {
-      toast[type](message, {
-        theme: "light",
+  const adaptToast = useCallback(
+    (message: string, type: "success" | "error" | "warning" | "info", duration: number = 2000) => {
+      const formattedMessage = message
+        .trim()
+        .split("\n")
+        .map((line) => line.trim())
+        .join("\n");
+
+      const content = (
+        <div className="whitespace-pre-line text-sm leading-relaxed">
+          {formattedMessage}
+        </div>
+      );
+
+      toast[type](content, {
+        theme: colorScheme === "dark" ? "light" : "dark",
+        autoClose: duration
       });
-    } else {
-      toast[type](message, {
-        theme: "dark",
-        });
-      }
     },
     [colorScheme],
+  );
+
+  const warnIfJikanOffline = useCallback(() => {
+    if (jikanStatus.isOnline) return false;
+
+    adaptToast(
+      jikanStatus.error ??
+        "Server is currently down. Search and import are disabled.",
+      "warning",
+    );
+    return true;
+  }, [adaptToast, jikanStatus.error, jikanStatus.isOnline]);
+
+  const openImportModal = useCallback(() => {
+    if (warnIfJikanOffline()) return;
+
+    close();
+    setIsImportModalOpen(true);
+  }, [close, warnIfJikanOffline]);
+
+  const handleImportSuccess = useCallback(
+    (result: MalImportSuccess) => {
+      if (warnIfJikanOffline()) return;
+
+      setIsLoadingImport(true);
+
+      if (!editor) {
+        adaptToast("Canvas is not ready yet. Try again in a moment.", "error");
+        return;
+      }
+
+      adaptToast(
+        `Adding ${result.entries.length} ${result.type} entries to canvas…`,
+        "info",
+        3000,
+      );
+
+      void addMalImportToCanvas(editor, result).then(({ added, failed }) => {
+        const suffix = failed > 0 ? ` (${failed} could not be loaded)` : "";
+        adaptToast(
+          `Imported ${added} ${result.type} entries for ${result.myinfo.user_name}${suffix}`,
+          added > 0 ? "success" : "error",
+        );
+        setIsLoadingImport(false);
+      });
+    },
+    [adaptToast, editor, warnIfJikanOffline],
   );
 
   const handleOnImportQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      adaptToast("Importing...", "success");
+      if (warnIfJikanOffline()) return;
+      openImportModal();
       return;
     }
-  }
+  };
 
   const handleOnHelpQ = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      adaptToast("Help requested...", "success");
+      adaptToast(
+        `/anime/title — search for an anime
+        /manga/title — search for a manga
+        /help — show this message
+        /import + Enter — import your MAL XML list`,
+        "info",
+        5000
+      );
       return;
     }
   }
@@ -246,9 +345,19 @@ export default function Home() {
 
   const handleOnKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     const value = event.currentTarget.value;
-    const dropdownCmdList = commands.filter((command) => command.label.includes(value));
-    if (dropdownCmdList.length > 0) setCmdList(dropdownCmdList);
-    else setCmdList([]);
+    const dropdownCmdList = commands.filter((command) =>
+      command.label.includes(value),
+    );
+    setCmdList((prev) => {
+      const next = dropdownCmdList.length > 0 ? dropdownCmdList : [];
+      if (
+        prev.length === next.length &&
+        prev.every((cmd, index) => cmd.label === next[index]?.label)
+      ) {
+        return prev;
+      }
+      return next;
+    });
 
     if ((event.key === "Backspace" && value.length === 0) || event.key === "Escape") {
       event.preventDefault();
@@ -260,35 +369,57 @@ export default function Home() {
       handleOnImportQ(event);
     } else if (value.length > 0 && value === "help") {
       handleOnHelpQ(event);
+    } else if (event.key === "Enter" && dropdownCmdList.length > 0) {
+      const selectedCmd = dropdownCmdList[selectedIndex];
+      if (selectedCmd?.label === "/import") {
+        event.preventDefault();
+        if (warnIfJikanOffline()) return;
+        openImportModal();
+        return;
+      }
+      if (selectedCmd?.label === "/help") {
+        event.preventDefault();
+        handleOnHelpQ(event);
+        return;
+      }
     }
 
     // add the selected to item to be placed on the tldraw canvas
     if ((value.includes("anime") || value.includes("manga")) && event.key === "Enter") {
-      console.log(mediaData[selectedIndex]);
       event.preventDefault();
+      if (warnIfJikanOffline()) return;
       void addToCanvas(mediaData[selectedIndex]);
       return;
     }
 
-    if (!isLoading && mediaData.length > 0) {
+    const canNavigateCmd = dropdownCmdList.length > 0;
+    const canNavigateMedia =
+      !isLoading && mediaData.length > 0 && dropdownCmdList.length === 0;
+
+    const listLength = dropdownCmdList.length > 0
+      ? dropdownCmdList.length
+      : mediaData.length;
+
+    if (canNavigateCmd || canNavigateMedia) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        moveSelection("down");
+        moveSelection("down", listLength);
         return;
       }
 
       if (event.key === "ArrowUp") {
         event.preventDefault();
-        moveSelection("up");
+        moveSelection("up", listLength);
       }
     }
   };
 
   const handleOnBlur = () => {
+    setCmdList([]);
     close();
   }
 
-  const handleOnThemeChange = (theme: "dark" | "light") => {
+  const handleOnThemeChange = (theme: ColorScheme) => {
     setColorScheme(theme);
   };
 
@@ -296,122 +427,28 @@ export default function Home() {
     setEditor(nextEditor);
   }, []);
 
-  const loadImageSize = (src: string) =>
-    new Promise<{ w: number; h: number }>((resolve, reject) => {
-      const image = new window.Image();
-      image.onload = () =>
-        resolve({ w: image.naturalWidth, h: image.naturalHeight });
-      image.onerror = reject;
-      image.src = src;
-    });
-
-  const loadAssetsJson = useCallback(() => {
-    const assets = editor?.getAssets() ?? [];
-    if (assets.length > 0) {
-      return assets;
-    }
-    return [];
-  }, [editor])
-
-  const addToCanvas = async (media: Media) => {
-    if (!editor) return;
-    
-    const assets = loadAssetsJson();
-    console.log(assets);
-
-    let assetId: TLAsset["id"] | null = null;
-    const duplicateAsset = assets.find((asset) => asset.meta?.malId === media.mal_id);
-
-    const imageUrl = media.images.jpg.image_url ?? "https://placehold.co/300x400/jpg?text=4:3";
-
-    const displayWidth = 300;
-
-    let sourceWidth = displayWidth;
-    let sourceHeight = 400;
-    
-    const size = await loadImageSize(imageUrl);
-    sourceWidth = size.w;
-    sourceHeight = size.h;
-
-    const displayHeight = (sourceHeight / sourceWidth) * displayWidth;
-    const center = editor.getViewportPageBounds().center;
-
-    if (duplicateAsset) {
-      assetId = duplicateAsset.id
-      
-      editor.createShape({
-        type: "image",
-        x: center.x - displayWidth / 2,
-        y: center.y - displayHeight / 2,
-        meta: {
-          title: media.title,
-          rating: media.rating,
-          malId: media.mal_id,
-          url: media.url,
-        },
-        props: {
-          assetId,
-          w: displayWidth,
-          h: displayHeight,
-          altText: media.title,
-        },
-      });
-    }
-    else {
-      assetId = AssetRecordType.createId();
-
-      const asset: TLAsset = {
-        id: assetId,
-        type: "image",
-        typeName: "asset",
-        props: {
-          name: media.title,
-          src: imageUrl,
-          w: sourceWidth,
-          h: sourceHeight,
-          mimeType: "image/jpeg",
-          isAnimated: false,
-        },
-        meta: {
-          assetId,
-          title: media.title,
-          rating: media.rating,
-          malId: media.mal_id,
-          url: media.url,
-        },
-      }
-  
-      editor.createAssets([asset]);
-
-      editor.createShape({
-        type: "image",
-        x: center.x - displayWidth / 2,
-        y: center.y - displayHeight / 2,
-        meta: {
-          title: media.title,
-          rating: media.rating,
-          malId: media.mal_id,
-          url: media.url,
-        },
-        props: {
-          assetId,
-          w: displayWidth,
-          h: displayHeight,
-          altText: media.title,
-        },
-      });
-    }
-  };
+  const addToCanvas = useCallback(
+    async (media: Media) => {
+      if (!editor || warnIfJikanOffline()) return;
+      await addMediaToCanvas(editor, mediaToCanvasItem(media));
+    },
+    [editor, warnIfJikanOffline],
+  );
 
   return (
     <div className="w-full h-screen">
-      {/* <div className="absolute top-2 w-full z-10 flex justify-center items-center gap-2">
-        <div className="flex gap-4 bg-background rounded-lg p-2 shadow-md">
-          <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "dark" && "text-zinc-800")} onClick={() => handleOnThemeChange("dark")}>Dark</button>
-          <button className={clsxm("text-[12px] text-zinc-500 cursor-pointer", colorScheme === "light" && "text-zinc-800")} onClick={() => handleOnThemeChange("light")}>Light</button>
+
+      {isLoadingImport && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/30 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-zinc-200 bg-white px-6 py-4 shadow-lg">
+            <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-700" />
+            <p className="text-sm text-zinc-600">Importing your MAL list to canvas</p>
+            <p className="text-sm text-zinc-600">This could take a while...</p>
+          </div>
         </div>
-      </div> */}
-      <div className="absolute top-2 w-full z-10 flex justify-center items-center gap-2">
+      )}
+
+      <div className="absolute top-2 w-full z-10 flex flex-col items-center gap-2">
         <div
           className={clsxm(
             "flex items-center gap-1 rounded-lg border p-1 shadow-md transition-colors",
@@ -451,6 +488,24 @@ export default function Home() {
             <Moon className="h-4 w-4" />
           </button>
         </div>
+
+        {!jikanStatus.isOnline && (
+          <div
+            role="status"
+            className={clsxm(
+              "max-w-md rounded-lg border px-3 py-2 text-center text-sm shadow-md",
+              colorScheme === "dark"
+                ? "border-amber-900/50 bg-amber-950/80 text-amber-200"
+                : "border-amber-200 bg-amber-50 text-amber-900",
+            )}
+          >
+            <p className="font-medium">Server is currently down</p>
+            <p className="mt-0.5 text-xs opacity-80">
+              {jikanStatus.error ??
+                "Search and import are disabled until the server is back online"}
+            </p>
+          </div>
+        )}
       </div>
       {isOpen && (
         <div
@@ -470,12 +525,28 @@ export default function Home() {
               className="w-40 bg-transparent text-sm text-zinc-800 outline-none"
             />
           </div>
-          <div className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-scroll">
+          <div
+            ref={listScrollRef}
+            className="flex flex-col gap-2 pb-1 max-h-64 overflow-y-auto"
+          >
             {
               cmdList.length > 0 ? (
                 <div className="flex flex-col gap-2">
-                  {cmdList.map((cmd) => (
-                    <div key={cmd.label} className="text-sm text-zinc-500">{cmd.label}</div>
+                  {cmdList.map((cmd, idx) => (
+                    <div
+                      key={cmd.label}
+                      ref={(element) => {
+                        itemRefs.current[idx] = element;
+                      }}
+                      className={clsxm(
+                        "scroll-m-1 rounded-md px-2 py-1 text-sm text-zinc-500",
+                        selectedIndex === idx &&
+                          "bg-blue-400 font-semibold text-white",
+                      )}
+                    >
+                      <span>{cmd.label}</span>
+                      <span className="ml-2 text-xs opacity-80">{cmd.desc}</span>
+                    </div>
                   ))}
                 </div>
               ) :
@@ -493,7 +564,7 @@ export default function Home() {
                   key={media.mal_id}
                 >
                   <Image src={media.images.jpg.image_url} alt={media.title} className="w-24 h-32 p-2 rounded-sm" width={96} height={128} />
-                  <div className="flex flex-col">
+                  <div className="flex flex-col pt-1.5">
                     <p className="font-semibold">{media.title}</p>
                     <p className="text-sm text-zinc-500">{media.rating}</p>
                   </div>
@@ -504,6 +575,13 @@ export default function Home() {
           </div>
         </div>
       )}
+      <MalImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        colorScheme={colorScheme}
+        onSuccess={handleImportSuccess}
+        onError={(message) => adaptToast(message, "error")}
+      />
       <TldrawCanvas
         onMount={handleOnMount}
         colorScheme={colorScheme}
