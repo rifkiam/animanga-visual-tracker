@@ -95,6 +95,7 @@ export default function TldrawCanvas({ onMount, colorScheme = "light" }: TldrawC
   return (
     <div className="h-full w-full">
       <Tldraw
+        licenseKey={process.env.NEXT_PUBLIC_TLDRAW_LICENSE_KEY || ""}
         store={store}
         onMount={onMount}
         colorScheme={colorScheme}
